@@ -30,9 +30,10 @@
 //! and the cleanup sweeps them by subject. With the `ical` and `vcard`
 //! features, [`ical`], [`ical_todo`] and [`vcard`] round-trip an event, a
 //! task and a contact through the projections, and [`ical_instances`]
-//! writes single occurrences of a series through their instances. Every
-//! resource a run creates is named `io-msgraph-test-<millis>`, and nothing
-//! else is ever written.
+//! writes single occurrences of a series through their instances, which
+//! [`ical_instance_windows`] reads over ten years in windows Graph accepts.
+//! Every resource a run creates is named `io-msgraph-test-<millis>`, and
+//! nothing else is ever written.
 
 #![cfg(any(
     feature = "rustls-ring",
@@ -603,6 +604,108 @@ fn ical_instances() {
                 document.contains("EXDATE;TZID=Europe/Paris:20300124T100000\r\n"),
                 "the deletion stands:\n{document}"
             );
+        },
+        |client| {
+            if let Err(err) = client.calendar_delete(&calendar_id) {
+                report_leftover("calendar", &calendar_id, &err);
+            }
+        },
+    );
+}
+
+/// An open-ended series older than five years lists its instances over
+/// today plus or minus five years in the windows `instance_windows` cuts,
+/// Graph answering 400 to one listing over that range.
+#[cfg(feature = "ical")]
+#[test]
+#[ignore = "requires Graph credentials and --ignored"]
+fn ical_instance_windows() {
+    use io_msgraph::v1::rest::users::events::ical::MSGRAPH_INSTANCES_MAX_YEARS;
+    use jiff::{Span, Timestamp, civil::Date, tz::TimeZone};
+
+    let mut client = connect();
+    let name = format!("io-msgraph-test-{}", unix_millis());
+    let uid = format!("{name}@pimalaya.org");
+    let calendar_id = calendar_create(&mut client, &name);
+
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+    let today = Timestamp::from_second(now.as_secs() as i64)
+        .unwrap()
+        .to_zoned(TimeZone::UTC)
+        .date();
+    let years = Span::new().years(MSGRAPH_INSTANCES_MAX_YEARS);
+    let within = (
+        today.checked_sub(years).unwrap(),
+        today.checked_add(years).unwrap(),
+    );
+
+    // NOTE: every Monday of `within`, the series starting before it.
+    let mut monday: Date = "2019-01-07".parse().unwrap();
+    let mut expected = 0;
+    while monday < within.1 {
+        if monday >= within.0 {
+            expected += 1;
+        }
+        monday = monday.checked_add(Span::new().days(7)).unwrap();
+    }
+
+    with_cleanup(
+        &mut client,
+        |client| {
+            let document = event_document(
+                &uid,
+                &name,
+                &[
+                    "DTSTART;TZID=Europe/Paris:20190107T100000",
+                    "DTEND;TZID=Europe/Paris:20190107T103000",
+                    "RRULE:FREQ=WEEKLY",
+                ],
+            );
+            let written =
+                MsgraphEvent::create_from_ical(document.as_bytes()).expect("the series projects");
+            let master = client
+                .event_create(Some(&calendar_id), &written)
+                .expect("series create")
+                .response;
+
+            let windows = master
+                .recurrence
+                .as_option()
+                .expect("the series reads back with its recurrence")
+                .instance_windows(within)
+                .expect("the series bounds read");
+            assert_eq!(windows.len(), 3, "ten years in three windows: {windows:?}");
+
+            let params = MsgraphEventsListParams {
+                select: Some("id,start"),
+                ..Default::default()
+            };
+            let mut ids = Vec::new();
+            for (start, end) in &windows {
+                let mut page = client
+                    .event_instances(&master.id, start, end, &params)
+                    .unwrap_or_else(|err| panic!("instances from {start} to {end}: {err:?}"))
+                    .response;
+                ids.append(&mut page.value);
+                while let Some(next) = page.next_link.take() {
+                    page = client
+                        .page_get::<MsgraphEvent>(&next, None)
+                        .expect("instances, next page")
+                        .response;
+                    ids.append(&mut page.value);
+                }
+            }
+            let mut ids: Vec<String> = ids.into_iter().map(|instance| instance.id).collect();
+            ids.sort();
+            ids.dedup();
+            assert_eq!(ids.len(), expected, "every Monday of the range, once");
+
+            let (start, end) = (&windows[0].0, &windows[windows.len() - 1].1);
+            let status = match client.event_instances(&master.id, start, end, &params) {
+                Err(MsgraphClientStdError::Send(err)) => err.api().map(|err| err.status),
+                _ => None,
+            };
+            assert_eq!(status, Some(400), "Graph refuses ten years at once");
         },
         |client| {
             if let Err(err) = client.calendar_delete(&calendar_id) {

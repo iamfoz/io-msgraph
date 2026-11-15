@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+### Added
+
+- Added `MsgraphPatternedRecurrence::instance_windows` (`ical` feature), the windows the instances of a series are read in within a range the caller picks, each the `start` and `end` `event_instances` takes, and `MSGRAPH_INSTANCES_MAX_YEARS`.
+
+  Graph refuses an `instances` listing over more than five years (400 "Maximum number of years: 5"): every window stays under it, an open-ended series ending where the range does.
+
 ## [0.9.0] - 2026-11-13
 
 ### Changed

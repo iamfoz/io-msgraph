@@ -38,6 +38,12 @@
 //! of the series. [`MsgraphEvent::instance_update_from_ical`] projects one
 //! occurrence onto the update of its instance, and a consumer deletes the
 //! instance of an occurrence the document cancels.
+//!
+//! The exceptions of a series are read through its instances, which Graph
+//! lists over five years at most ([`MSGRAPH_INSTANCES_MAX_YEARS`]):
+//! [`MsgraphPatternedRecurrence::instance_windows`] cuts the span of a
+//! series within a range the caller picks into windows Graph accepts, the
+//! crate reading no clock.
 
 mod windows_zones;
 
@@ -118,6 +124,10 @@ pub const MSGRAPH_EVENT_ICAL_SELECT: &str = "id,iCalUId,changeKey,createdDateTim
      originalEndTimeZone,subject,body,start,end,isAllDay,location,recurrence,attendees,\
      organizer,categories,showAs,sensitivity,importance,isReminderOn,\
      reminderMinutesBeforeStart,isCancelled,webLink,onlineMeeting,cancelledOccurrences";
+
+/// The most years an `instances` listing spans, Graph answering 400
+/// "Maximum number of years: 5" past it.
+pub const MSGRAPH_INSTANCES_MAX_YEARS: i16 = 5;
 
 /// Product identifier the synthesized document carries.
 pub(crate) const PRODID: &str = "-//Pimalaya//io-msgraph//EN";
@@ -369,6 +379,49 @@ impl MsgraphPatternedRecurrence {
         };
 
         Some((start, end))
+    }
+
+    /// The windows the instances of a series are read in within `within`,
+    /// each the `start` and `end` instants `event_instances` takes.
+    ///
+    /// `within` runs from the midnight starting its first date to the one
+    /// starting its second, in UTC. The series spans its [`bounds`], its
+    /// last day included, an open-ended one ending where `within` does;
+    /// that span, cut to `within`, is split into consecutive windows of
+    /// [`MSGRAPH_INSTANCES_MAX_YEARS`] years less a day, Graph refusing a
+    /// longer one with a 400.
+    ///
+    /// `None` when the bounds do not read, no window when the series and
+    /// `within` do not meet.
+    ///
+    /// [`bounds`]: Self::bounds
+    pub fn instance_windows(&self, within: (Date, Date)) -> Option<Vec<(String, String)>> {
+        let (start, end) = self.bounds()?;
+        let end = match end {
+            Some(end) => end.checked_add(Span::new().days(1)).ok()?,
+            None => within.1,
+        };
+        let start = start.max(within.0);
+        let end = end.min(within.1);
+
+        let instant = |date: Date| -> Option<String> {
+            let timestamp: Timestamp = date.to_zoned(TimeZone::UTC).ok()?.timestamp();
+            Some(timestamp.strftime("%Y-%m-%dT%H:%M:%SZ").to_string())
+        };
+        let mut windows = Vec::new();
+        let mut from = start;
+        while from < end {
+            let longest = from
+                .checked_add(Span::new().years(MSGRAPH_INSTANCES_MAX_YEARS))
+                .ok()?
+                .checked_sub(Span::new().days(1))
+                .ok()?;
+            let to = longest.min(end);
+            windows.push((instant(from)?, instant(to)?));
+            from = to;
+        }
+
+        Some(windows)
     }
 }
 
@@ -2327,6 +2380,166 @@ mod tests {
             bounds(MsgraphRecurrenceRangeType::EndDate, None),
             Some((start, Some("0001-01-01".into()))),
         );
+    }
+
+    /// A weekly series over `start` and `end`, Graph's sentinel standing
+    /// for no end, numbered ones taking eleven occurrences.
+    fn weekly(
+        range_type: MsgraphRecurrenceRangeType,
+        start: &str,
+        end: &str,
+    ) -> MsgraphPatternedRecurrence {
+        MsgraphPatternedRecurrence {
+            pattern: MsgraphRecurrencePattern {
+                pattern_type: Some(MsgraphRecurrencePatternType::Weekly),
+                ..Default::default()
+            },
+            range: MsgraphRecurrenceRange {
+                range_type: Some(range_type),
+                start_date: Some(start.into()),
+                end_date: Some(end.into()),
+                number_of_occurrences: Some(11),
+                ..Default::default()
+            },
+        }
+    }
+
+    fn windows(
+        recurrence: &MsgraphPatternedRecurrence,
+        from: &str,
+        to: &str,
+    ) -> Vec<(String, String)> {
+        let within = (from.parse().unwrap(), to.parse().unwrap());
+        recurrence.instance_windows(within).unwrap()
+    }
+
+    fn window(from: &str, to: &str) -> (String, String) {
+        (format!("{from}T00:00:00Z"), format!("{to}T00:00:00Z"))
+    }
+
+    #[test]
+    fn a_bounded_series_inside_the_range_is_one_window() {
+        let series = weekly(
+            MsgraphRecurrenceRangeType::EndDate,
+            "2026-08-14",
+            "2026-09-30",
+        );
+        assert_eq!(
+            windows(&series, "2021-11-15", "2031-11-15"),
+            [window("2026-08-14", "2026-10-01")],
+        );
+    }
+
+    #[test]
+    fn a_series_over_five_years_is_cut_in_windows_graph_accepts() {
+        let series = weekly(
+            MsgraphRecurrenceRangeType::EndDate,
+            "2020-01-01",
+            "2031-12-31",
+        );
+        let windows = windows(&series, "2000-01-01", "2040-01-01");
+        assert_eq!(
+            windows,
+            [
+                window("2020-01-01", "2024-12-31"),
+                window("2024-12-31", "2029-12-30"),
+                window("2029-12-30", "2032-01-01"),
+            ],
+        );
+
+        for (from, to) in &windows {
+            let from: Timestamp = from.parse().unwrap();
+            let to: Timestamp = to.parse().unwrap();
+            let limit = from
+                .to_zoned(TimeZone::UTC)
+                .checked_add(Span::new().years(MSGRAPH_INSTANCES_MAX_YEARS))
+                .unwrap()
+                .timestamp();
+            assert!(to < limit, "{from} to {to} spans five years or more");
+        }
+    }
+
+    #[test]
+    fn an_open_ended_series_ends_where_the_range_does() {
+        let series = weekly(
+            MsgraphRecurrenceRangeType::NoEnd,
+            "2019-01-07",
+            "0001-01-01",
+        );
+        assert_eq!(
+            windows(&series, "2021-11-15", "2031-11-15"),
+            [
+                window("2021-11-15", "2026-11-14"),
+                window("2026-11-14", "2031-11-13"),
+                window("2031-11-13", "2031-11-15"),
+            ],
+        );
+    }
+
+    #[test]
+    fn a_series_the_range_does_not_meet_has_no_window() {
+        let past = weekly(
+            MsgraphRecurrenceRangeType::EndDate,
+            "2010-01-04",
+            "2012-12-31",
+        );
+        assert_eq!(windows(&past, "2021-11-15", "2031-11-15"), []);
+
+        let ahead = weekly(
+            MsgraphRecurrenceRangeType::NoEnd,
+            "2031-11-15",
+            "0001-01-01",
+        );
+        assert_eq!(windows(&ahead, "2021-11-15", "2031-11-15"), []);
+    }
+
+    #[test]
+    fn the_end_date_of_a_series_is_read_whole() {
+        let series = weekly(
+            MsgraphRecurrenceRangeType::EndDate,
+            "2020-01-06",
+            "2021-11-15",
+        );
+        assert_eq!(
+            windows(&series, "2021-11-15", "2031-11-15"),
+            [window("2021-11-15", "2021-11-16")],
+        );
+
+        // NOTE: the range ends at the midnight starting its last date.
+        let series = weekly(
+            MsgraphRecurrenceRangeType::EndDate,
+            "2026-08-14",
+            "2026-09-30",
+        );
+        assert_eq!(
+            windows(&series, "2026-01-01", "2026-09-30"),
+            [window("2026-08-14", "2026-09-30")],
+        );
+    }
+
+    #[test]
+    fn a_numbered_series_is_bounded_by_its_occurrences() {
+        let series = weekly(
+            MsgraphRecurrenceRangeType::Numbered,
+            "2026-09-28",
+            "0001-01-01",
+        );
+        assert_eq!(
+            windows(&series, "2021-11-15", "2031-11-15"),
+            [window("2026-09-28", "2026-12-15")],
+        );
+    }
+
+    #[test]
+    fn a_series_whose_bounds_do_not_read_has_no_windows() {
+        let mut series = weekly(
+            MsgraphRecurrenceRangeType::EndDate,
+            "2026-08-14",
+            "2026-09-30",
+        );
+        series.range.start_date = None;
+        let within = ("2021-11-15".parse().unwrap(), "2031-11-15".parse().unwrap());
+        assert_eq!(series.instance_windows(within), None);
     }
 
     #[test]
