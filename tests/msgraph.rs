@@ -29,8 +29,9 @@
 //! messages sent to the mailbox itself land in its inbox and sent items,
 //! and the cleanup sweeps them by subject. With the `ical` and `vcard`
 //! features, [`ical`], [`ical_todo`] and [`vcard`] round-trip an event, a
-//! task and a contact through the projections, and [`ical_instances`]
-//! writes single occurrences of a series through their instances, which
+//! task and a contact through the projections, [`ical_instances`] writes
+//! single occurrences of a series through their instances, which
+//! [`ical_series_with_its_instances`] does from one series document, and
 //! [`ical_instance_windows`] reads over ten years in windows Graph accepts.
 //! Every resource a run creates is named `io-msgraph-test-<millis>`, and
 //! nothing else is ever written.
@@ -604,6 +605,119 @@ fn ical_instances() {
                 document.contains("EXDATE;TZID=Europe/Paris:20300124T100000\r\n"),
                 "the deletion stands:\n{document}"
             );
+        },
+        |client| {
+            if let Err(err) = client.calendar_delete(&calendar_id) {
+                report_leftover("calendar", &calendar_id, &err);
+            }
+        },
+    );
+}
+
+/// A series written with an EXDATE and an override through
+/// `MsgraphEventSeries`: the master created, then its instances deleted
+/// and patched, the series reading back with both.
+#[cfg(feature = "ical")]
+#[test]
+#[ignore = "requires Graph credentials and --ignored"]
+fn ical_series_with_its_instances() {
+    use io_msgraph::v1::rest::users::events::ical::{
+        MSGRAPH_EVENT_ICAL_SELECT, MSGRAPH_EVENT_STASH_EXPAND, MsgraphEventInstanceAction,
+        MsgraphEventSeries,
+    };
+
+    let mut client = connect();
+    let name = format!("io-msgraph-test-{}", unix_millis());
+    let uid = format!("{name}@pimalaya.org");
+    let calendar_id = calendar_create(&mut client, &name);
+
+    with_cleanup(
+        &mut client,
+        |client| {
+            let master = event_document(
+                &uid,
+                &name,
+                &[
+                    "DTSTART;TZID=Europe/Paris:20300110T100000",
+                    "DTEND;TZID=Europe/Paris:20300110T103000",
+                    "RRULE:FREQ=WEEKLY;COUNT=4",
+                    "EXDATE;TZID=Europe/Paris:20300124T100000",
+                ],
+            );
+            let exception = format!(
+                "BEGIN:VEVENT\r\nUID:{uid}\r\nDTSTAMP:20300101T000000Z\r\n\
+                 RECURRENCE-ID;TZID=Europe/Paris:20300117T100000\r\n\
+                 DTSTART;TZID=Europe/Paris:20300117T120000\r\n\
+                 DTEND;TZID=Europe/Paris:20300117T123000\r\n\
+                 SUMMARY:{name}\r\nEND:VEVENT\r\n"
+            );
+            let document = master.replace("END:VCALENDAR", &format!("{exception}END:VCALENDAR"));
+
+            let series = MsgraphEventSeries::create_from_ical(document.as_bytes())
+                .expect("the series projects");
+            assert!(series.left_out.is_empty(), "{:?}", series.left_out);
+            assert_eq!(series.instances.len(), 2, "{:?}", series.instances);
+
+            let master_id = client
+                .event_create(Some(&calendar_id), &series.master)
+                .expect("series create")
+                .response
+                .id;
+
+            let params = MsgraphEventsListParams {
+                select: Some(MSGRAPH_EVENT_ICAL_SELECT),
+                ..Default::default()
+            };
+            for change in &series.instances {
+                let (start, end) = &change.window;
+                let instances = client
+                    .event_instances(&master_id, start, end, &params)
+                    .expect("instances in the window of a change")
+                    .response
+                    .value;
+                let instance = instances
+                    .iter()
+                    .find(|instance| change.is_instance(instance))
+                    .unwrap_or_else(|| panic!("no instance for {change:?}: {instances:?}"));
+
+                match &change.action {
+                    MsgraphEventInstanceAction::Delete => {
+                        client.event_delete(&instance.id).expect("instance delete");
+                    }
+                    MsgraphEventInstanceAction::Update(patch) => {
+                        client
+                            .event_update(&instance.id, patch)
+                            .expect("instance update");
+                    }
+                }
+            }
+
+            let master = client
+                .event_get(
+                    &master_id,
+                    Some(MSGRAPH_EVENT_ICAL_SELECT),
+                    Some(MSGRAPH_EVENT_STASH_EXPAND),
+                )
+                .expect("series master get")
+                .response;
+            let instances = client
+                .event_instances(&master_id, WINDOW_START, WINDOW_END, &params)
+                .expect("series instances")
+                .response
+                .value;
+            let exceptions: Vec<&MsgraphEvent> = instances
+                .iter()
+                .filter(|e| e.event_type == Some(MsgraphEventType::Exception))
+                .collect();
+
+            let read = master.to_ical_series(&exceptions);
+            for expected in [
+                "EXDATE;TZID=Europe/Paris:20300124T100000\r\n",
+                "RECURRENCE-ID;TZID=Europe/Paris:20300117T100000\r\n",
+                "DTSTART;TZID=Europe/Paris:20300117T120000\r\n",
+            ] {
+                assert!(read.contains(expected), "missing `{expected}`:\n{read}");
+            }
         },
         |client| {
             if let Err(err) = client.calendar_delete(&calendar_id) {

@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+### Added
+
+- Added `MsgraphEventSeries` (`ical` feature), a series document cut the way Graph takes it: `create_from_ical` and `update_from_ical` give the master's create body or update patch, the change of each instance the document cancels or overrides, and `left_out`, what Graph cannot hold.
+
+  A write of a series through `MsgraphEvent::create_from_ical` or `update_from_ical` carries the master alone, so its EXDATEs and overrides were lost with no word. Each `MsgraphEventInstanceChange` names its occurrence (`original_start`, the `window` to list it in, `is_instance`) and its `MsgraphEventInstanceAction`: `Delete` for an occurrence cancelled, `Update` with the patch of one overridden. `left_out` names an RDATE, an EXRULE, a RECURRENCE-ID with a RANGE, an occurrence restored, a value in an unknown zone and an override's unmanaged lines.
+
 ## [0.9.1] - 2026-11-15
 
 ### Added

@@ -1338,6 +1338,96 @@ fn event_update_patches_only_what_is_set_or_cleared() {
     );
 }
 
+/// A series with an EXDATE and an override, written as a caller writes
+/// it: the master created, then each instance the projection names found
+/// in its window and deleted or patched.
+#[cfg(feature = "ical")]
+#[test]
+fn a_series_reaches_its_instances_through_the_coroutines() {
+    use io_msgraph::v1::rest::users::events::{
+        create::MsgraphEventCreate,
+        delete::MsgraphEventDelete,
+        ical::{MSGRAPH_EVENT_ICAL_SELECT, MsgraphEventInstanceAction, MsgraphEventSeries},
+        instances::MsgraphEventInstances,
+        list::MsgraphEventsListParams,
+        update::MsgraphEventUpdate,
+    };
+
+    let document = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\n\
+        UID:series@x.org\r\nDTSTART;TZID=Europe/Paris:20261123T140000\r\n\
+        DTEND;TZID=Europe/Paris:20261123T150000\r\nRRULE:FREQ=DAILY;COUNT=4\r\n\
+        EXDATE;TZID=Europe/Paris:20261125T140000\r\nSUMMARY:Review\r\n\
+        END:VEVENT\r\nBEGIN:VEVENT\r\nUID:series@x.org\r\n\
+        RECURRENCE-ID;TZID=Europe/Paris:20261124T140000\r\n\
+        DTSTART;TZID=Europe/Paris:20261124T160000\r\n\
+        DTEND;TZID=Europe/Paris:20261124T170000\r\nSUMMARY:Review\r\n\
+        END:VEVENT\r\nEND:VCALENDAR\r\n";
+    let series = MsgraphEventSeries::create_from_ical(document.as_bytes()).unwrap();
+
+    let mut coroutine =
+        MsgraphEventCreate::new(&auth(), "me", Some("CAL1"), &series.master).unwrap();
+    let created = json_response("HTTP/1.1 201 Created", r#"{ "id": "SM1" }"#);
+    let master = run(&mut coroutine, &created).0.unwrap().response;
+
+    let listing = json_response(
+        "HTTP/1.1 200 OK",
+        r#"{ "value": [
+            { "id": "I1", "type": "occurrence", "originalStart": "2026-11-23T13:00:00Z" },
+            { "id": "I2", "type": "occurrence", "originalStart": "2026-11-24T13:00:00Z" },
+            { "id": "I3", "type": "occurrence", "originalStart": "2026-11-25T13:00:00Z" },
+            { "id": "I4", "type": "occurrence", "originalStart": "2026-11-26T13:00:00Z" }
+        ] }"#,
+    );
+    let params = MsgraphEventsListParams {
+        select: Some(MSGRAPH_EVENT_ICAL_SELECT),
+        ..Default::default()
+    };
+
+    let mut requests = Vec::new();
+    for change in &series.instances {
+        let (start, end) = &change.window;
+        let mut coroutine =
+            MsgraphEventInstances::new(&auth(), "me", &master.id, start, end, &params).unwrap();
+        let instances = run(&mut coroutine, &listing).0.unwrap().response.value;
+        let instance = instances
+            .iter()
+            .find(|instance| change.is_instance(instance))
+            .unwrap_or_else(|| panic!("no instance for {change:?}"));
+
+        let written = match &change.action {
+            MsgraphEventInstanceAction::Delete => {
+                let mut coroutine = MsgraphEventDelete::new(&auth(), "me", &instance.id).unwrap();
+                run(&mut coroutine, &empty_response("HTTP/1.1 204 No Content")).1
+            }
+            MsgraphEventInstanceAction::Update(patch) => {
+                let mut coroutine =
+                    MsgraphEventUpdate::new(&auth(), "me", &instance.id, patch).unwrap();
+                let updated = json_response("HTTP/1.1 200 OK", r#"{ "id": "I2" }"#);
+                run(&mut coroutine, &updated).1
+            }
+        };
+        requests.push(String::from_utf8_lossy(&written).into_owned());
+    }
+
+    let [patch, delete] = requests.as_slice() else {
+        panic!("one patch and one delete: {requests:?}");
+    };
+    assert!(
+        patch.starts_with("PATCH /v1.0/me/events/I2"),
+        "got: {patch}"
+    );
+    assert!(
+        patch.ends_with(
+            r#"{"start":{"dateTime":"2026-11-24T16:00:00","timeZone":"Europe/Paris"},"end":{"dateTime":"2026-11-24T17:00:00","timeZone":"Europe/Paris"}}"#
+        ),
+        "got: {patch}"
+    );
+    assert!(
+        delete.starts_with("DELETE /v1.0/me/events/I3"),
+        "got: {delete}"
+    );
+}
+
 #[test]
 fn event_instances_and_calendar_view_carry_their_window() {
     use io_msgraph::v1::rest::users::events::{

@@ -32,12 +32,14 @@
 //!   property ([`MSGRAPH_EVENT_STASH_ID`]) and spliced back on read; Graph
 //!   returns it only expanded ([`MSGRAPH_EVENT_STASH_EXPAND`]).
 //!
-//! A write of a document goes to the series master alone: an exception
-//! edited locally, a cancelled occurrence and an EXDATE do not push with
-//! it, Graph taking them only through the occurrence itself, an instance
-//! of the series. [`MsgraphEvent::instance_update_from_ical`] projects one
-//! occurrence onto the update of its instance, and a consumer deletes the
-//! instance of an occurrence the document cancels.
+//! The event a document projects onto is the series master alone: Graph
+//! takes an exception and a cancelled occurrence only through the
+//! occurrence itself, an instance of the series. [`MsgraphEventSeries`]
+//! cuts a series document into the write of its master and the change of
+//! each instance, a delete for an occurrence the document cancels and a
+//! patch for one it overrides, and names what Graph cannot hold;
+//! [`MsgraphEvent::instance_update_from_ical`] projects one occurrence
+//! onto the update of its instance.
 //!
 //! The exceptions of a series are read through its instances, which Graph
 //! lists over five years at most ([`MSGRAPH_INSTANCES_MAX_YEARS`]):
@@ -47,11 +49,12 @@
 
 mod windows_zones;
 
-use core::fmt;
+use core::{fmt, mem::take};
 
 use alloc::{
     borrow::{Cow, ToOwned},
-    collections::BTreeSet,
+    boxed::Box,
+    collections::{BTreeMap, BTreeSet},
     format,
     string::{String, ToString},
     vec,
@@ -67,8 +70,8 @@ use ical::{
         error::IcalParseError,
         line::IcalLine,
         param::{
-            cn::CN, cutype::CUTYPE, fmttype::FMTTYPE, partstat::PARTSTAT, role::ROLE, tzid::TZID,
-            value::VALUE,
+            cn::CN, cutype::CUTYPE, fmttype::FMTTYPE, partstat::PARTSTAT, range::RANGE, role::ROLE,
+            tzid::TZID, value::VALUE,
         },
     },
     tzdb,
@@ -206,7 +209,7 @@ impl MsgraphEvent {
     /// while Graph-only fields stay Unset.
     ///
     /// The exceptions of a series are not read: Graph takes each through
-    /// its instance ([`Self::instance_update_from_ical`]).
+    /// its instance ([`MsgraphEventSeries`]).
     pub fn from_ical(contents: &[u8]) -> Result<Self, MsgraphEventIcalError> {
         let calendar = IcalCst::parse(contents).map_err(MsgraphEventIcalError::Parse)?;
         project(find_vevent(&calendar, |vevent| {
@@ -261,12 +264,8 @@ impl MsgraphEvent {
             project(find_vevent(&calendar, |_| true)?)
         };
 
-        let mut event = occurrence(contents)?;
-        event.unset_unchanged(&occurrence(base)?);
-        event.recurrence = MsgraphField::Unset;
-        event.single_value_extended_properties = MsgraphField::Unset;
-
-        Ok((event != Self::default()).then_some(event))
+        let event = occurrence(contents)?;
+        Ok(instance_patch(event, &occurrence(base)?))
     }
 
     /// Leaves Unset every managed field `base` holds the same.
@@ -425,6 +424,110 @@ impl MsgraphPatternedRecurrence {
     }
 }
 
+/// A series document cut the way Graph takes it: its master, then the
+/// change of each instance it cancels or overrides.
+///
+/// A caller writes the master, then makes each change on the instance
+/// [`MsgraphEventInstanceChange::is_instance`] names among those
+/// `event_instances` lists in its window, and warns of or refuses what is
+/// left out. A delete whose instance is not listed is done already; a
+/// patch whose instance is not listed names an occurrence the series does
+/// not have.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct MsgraphEventSeries {
+    /// The create body or the update patch of the series master.
+    pub master: MsgraphEvent,
+    /// The changes of the instances, made once the master is written, in
+    /// the order of their original start.
+    pub instances: Vec<MsgraphEventInstanceChange>,
+    /// What Graph cannot hold, each as its logical line.
+    pub left_out: Vec<String>,
+}
+
+impl MsgraphEventSeries {
+    /// Projects a series document onto the create body of its master
+    /// ([`MsgraphEvent::create_from_ical`]) and the changes of its
+    /// instances, each following the master once it is created.
+    pub fn create_from_ical(contents: &[u8]) -> Result<Self, MsgraphEventIcalError> {
+        let master = MsgraphEvent::create_from_ical(contents)?;
+        let (instances, left_out) = instance_changes(contents, None)?;
+
+        Ok(Self {
+            master,
+            instances,
+            left_out,
+        })
+    }
+
+    /// Projects a series document onto the update patch of its master
+    /// ([`MsgraphEvent::update_from_ical`]) and the changes of its
+    /// instances, against `base`, the series as Graph holds it
+    /// ([`MsgraphEvent::to_ical_series`]).
+    ///
+    /// A patch moving the series' start, end or recurrence is taken to drop
+    /// the exceptions and cancelled occurrences of `base`, so the
+    /// instances are then changed as after a create.
+    pub fn update_from_ical(contents: &[u8], base: &[u8]) -> Result<Self, MsgraphEventIcalError> {
+        let master = MsgraphEvent::update_from_ical(contents, base)?;
+        let moved = !master.start.is_unset()
+            || !master.end.is_unset()
+            || !master.is_all_day.is_unset()
+            || !master.recurrence.is_unset();
+        let held = (!moved).then_some(base);
+        let (instances, left_out) = instance_changes(contents, held)?;
+
+        Ok(Self {
+            master,
+            instances,
+            left_out,
+        })
+    }
+}
+
+/// The change one instance of a series takes.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MsgraphEventInstanceChange {
+    /// When the occurrence originally starts, as Graph's `originalStart`
+    /// tells it: an RFC 3339 UTC instant, a date in an all-day series.
+    pub original_start: String,
+    /// The `start` and `end` `event_instances` lists the instance within.
+    pub window: (String, String),
+    /// What the instance takes.
+    pub action: MsgraphEventInstanceAction,
+}
+
+impl MsgraphEventInstanceChange {
+    /// Whether a listed instance is the occurrence this change names, by
+    /// its `originalStart`, which a listing returns only selected
+    /// ([`MSGRAPH_EVENT_ICAL_SELECT`]).
+    pub fn is_instance(&self, instance: &MsgraphEvent) -> bool {
+        let Some(original) = instance
+            .original_start
+            .as_deref()
+            .and_then(|start| start.parse::<Timestamp>().ok())
+        else {
+            return false;
+        };
+
+        match self.original_start.parse::<Timestamp>() {
+            Ok(start) => start == original,
+            Err(_) => self
+                .original_start
+                .parse::<Date>()
+                .is_ok_and(|date| original.to_zoned(TimeZone::UTC).date() == date),
+        }
+    }
+}
+
+/// What an instance of a series takes.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MsgraphEventInstanceAction {
+    /// Delete the instance, which cancels the occurrence.
+    Delete,
+    /// Patch the instance with the set and null fields of the event.
+    Update(Box<MsgraphEvent>),
+}
+
 /// An iCalendar document that cannot become a Graph event.
 #[derive(Debug)]
 pub enum MsgraphEventIcalError {
@@ -469,6 +572,331 @@ impl fmt::Display for MsgraphEventIcalError {
 }
 
 impl core::error::Error for MsgraphEventIcalError {}
+
+/// When an occurrence of a series originally starts: its date in an
+/// all-day series, its instant otherwise.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum OriginalStart {
+    /// The date of an all-day occurrence.
+    Date(Date),
+    /// The instant of a timed occurrence.
+    Instant(Timestamp),
+}
+
+impl OriginalStart {
+    /// Reads a DTSTART, RECURRENCE-ID or EXDATE value in the series starting
+    /// at `series`, in `tzid` else in the series' zone; `None` for a zone
+    /// neither table knows, or a date in a timed series.
+    fn read(value: &str, tzid: Option<&str>, series: &Boundary) -> Option<Self> {
+        let value = value.trim();
+
+        if value.len() == 8 {
+            let date = Date::strptime("%Y%m%d", value).ok()?;
+            return series.all_day.then_some(Self::Date(date));
+        }
+
+        let (local, utc) = match value.strip_suffix('Z') {
+            Some(local) => (local, true),
+            None => (value, false),
+        };
+        let local = DateTime::strptime("%Y%m%dT%H%M%S", local).ok()?;
+
+        if series.all_day {
+            return Some(Self::Date(local.date()));
+        }
+
+        let zone = if utc {
+            TimeZone::UTC
+        } else {
+            match zone(Some(tzid.unwrap_or(&series.zone))) {
+                Zone::Utc => TimeZone::UTC,
+                Zone::Iana(name) => TimeZone::get(&name).ok()?,
+                Zone::Unknown(_) => return None,
+            }
+        };
+
+        Some(Self::Instant(local.to_zoned(zone).ok()?.timestamp()))
+    }
+
+    /// The UTC date the occurrence starts on.
+    fn day(self) -> Date {
+        match self {
+            Self::Date(date) => date,
+            Self::Instant(instant) => instant.to_zoned(TimeZone::UTC).date(),
+        }
+    }
+
+    /// The occurrence as Graph's `originalStart` tells it.
+    fn to_graph(self) -> String {
+        match self {
+            Self::Date(date) => date.to_string(),
+            Self::Instant(instant) => instant.strftime("%Y-%m-%dT%H:%M:%SZ").to_string(),
+        }
+    }
+}
+
+/// What a series document sets apart from its rule, by original start.
+#[derive(Default)]
+struct Exceptions {
+    /// Whether the master carries a rule, Graph holding it as a series.
+    recurring: bool,
+    /// The occurrences cancelled, each with the line naming it.
+    cancelled: BTreeMap<OriginalStart, String>,
+    /// The occurrences overridden.
+    overridden: BTreeMap<OriginalStart, Override>,
+    /// What Graph cannot hold.
+    left_out: Vec<String>,
+}
+
+impl Exceptions {
+    /// Reads the exceptions of a series document, its values read in the
+    /// series starting at `series`.
+    fn read(calendar: &IcalCst<'_>, series: &Boundary) -> Result<Self, MsgraphEventIcalError> {
+        let master = find_vevent(calendar, |vevent| !has_prop(vevent, "RECURRENCE-ID"))?;
+        let mut exceptions = Self {
+            recurring: has_prop(master, "RRULE"),
+            ..Default::default()
+        };
+
+        for item in &master.items {
+            let IcalItem::Prop(line) = item else {
+                continue;
+            };
+            let name = line.name.get();
+
+            if name.eq_ignore_ascii_case("RDATE") || name.eq_ignore_ascii_case("EXRULE") {
+                exceptions.left_out.push(raw_line(line));
+                continue;
+            }
+            if !name.eq_ignore_ascii_case("EXDATE") {
+                continue;
+            }
+
+            let raw = raw_line(line);
+            let values = line.raw_value_str();
+            let head = raw.strip_suffix(&*values).unwrap_or(&raw);
+            let tzid = line.param::<TZID>();
+
+            for value in values.split(',') {
+                let named = format!("{head}{}", value.trim());
+                match OriginalStart::read(value, tzid.as_deref(), series) {
+                    Some(start) if exceptions.recurring => {
+                        exceptions.cancelled.insert(start, named);
+                    }
+                    _ => exceptions.left_out.push(named),
+                }
+            }
+        }
+
+        let vevents = calendar.items.iter().filter_map(|item| match item {
+            IcalItem::Component(component) if component_name(component) == "VEVENT" => {
+                Some(component.as_ref())
+            }
+            _ => None,
+        });
+
+        for vevent in vevents {
+            let Some(line) = find_prop(vevent, "RECURRENCE-ID") else {
+                continue;
+            };
+            let named = raw_line(line);
+
+            let tzid = line.param::<TZID>();
+            let start = OriginalStart::read(&line.raw_value_str(), tzid.as_deref(), series)
+                .filter(|_| exceptions.recurring && line.param::<RANGE>().is_none());
+            let Some(start) = start else {
+                exceptions.left_out.push(named);
+                continue;
+            };
+
+            let cancelled = find_prop(vevent, "STATUS").is_some_and(|status| {
+                status
+                    .raw_value_str()
+                    .trim()
+                    .eq_ignore_ascii_case("CANCELLED")
+            });
+            if cancelled {
+                exceptions.cancelled.insert(start, named);
+                continue;
+            }
+
+            let event = project(vevent)?;
+            exceptions.left_out.extend(
+                stash_lines(&event.single_value_extended_properties)
+                    .into_iter()
+                    .filter(|line| {
+                        let name = line.split([';', ':']).next().unwrap_or_default();
+                        !name.eq_ignore_ascii_case("UID")
+                            && !name.eq_ignore_ascii_case("RECURRENCE-ID")
+                    }),
+            );
+
+            let moved_to = find_prop(vevent, "DTSTART").and_then(|line| {
+                let tzid = line.param::<TZID>();
+                OriginalStart::read(&line.raw_value_str(), tzid.as_deref(), series)
+            });
+
+            exceptions.overridden.insert(
+                start,
+                Override {
+                    event,
+                    moved_to,
+                    line: named,
+                },
+            );
+        }
+
+        Ok(exceptions)
+    }
+}
+
+/// An occurrence a series document overrides.
+struct Override {
+    /// The occurrence, in full state.
+    event: MsgraphEvent,
+    /// When the occurrence starts now.
+    moved_to: Option<OriginalStart>,
+    /// Its RECURRENCE-ID line.
+    line: String,
+}
+
+/// The changes the instances of the series `contents` holds take against
+/// `base`, every occurrence following the series when there is none, and
+/// what Graph cannot hold of it.
+fn instance_changes(
+    contents: &[u8],
+    base: Option<&[u8]>,
+) -> Result<(Vec<MsgraphEventInstanceChange>, Vec<String>), MsgraphEventIcalError> {
+    let calendar = IcalCst::parse(contents).map_err(MsgraphEventIcalError::Parse)?;
+    let master = find_vevent(&calendar, |vevent| !has_prop(vevent, "RECURRENCE-ID"))?;
+    let start = find_prop(master, "DTSTART")
+        .and_then(boundary)
+        .ok_or(MsgraphEventIcalError::NoZonedStart)?;
+    let series = project(master)?;
+
+    let mut document = Exceptions::read(&calendar, &start)?;
+    let held = match base {
+        Some(base) => {
+            let calendar = IcalCst::parse(base).map_err(MsgraphEventIcalError::Parse)?;
+            Exceptions::read(&calendar, &start)?
+        }
+        None => Exceptions::default(),
+    };
+
+    let mut left_out = take(&mut document.left_out);
+    if !document.recurring {
+        return Ok((Vec::new(), left_out));
+    }
+
+    let starts: BTreeSet<OriginalStart> = [&document, &held]
+        .into_iter()
+        .flat_map(|exceptions| {
+            exceptions
+                .cancelled
+                .keys()
+                .chain(exceptions.overridden.keys())
+        })
+        .copied()
+        .collect();
+
+    let mut changes = Vec::new();
+    for start in starts {
+        let overridden = document.overridden.get(&start);
+        let held_overridden = held.overridden.get(&start);
+
+        let action = if document.cancelled.contains_key(&start) {
+            if held.cancelled.contains_key(&start) {
+                continue;
+            }
+            MsgraphEventInstanceAction::Delete
+        } else if let Some(line) = held.cancelled.get(&start) {
+            left_out.push(line.clone());
+            continue;
+        } else {
+            let occurrence = match overridden {
+                Some(exception) => Some(exception.event.clone()),
+                None => carried(&series, start),
+            };
+            let held_occurrence = match held_overridden {
+                Some(exception) => Some(exception.event.clone()),
+                None => carried(&series, start),
+            };
+
+            let (Some(occurrence), Some(held_occurrence)) = (occurrence, held_occurrence) else {
+                let exception = overridden.or(held_overridden);
+                left_out.extend(exception.map(|exception| exception.line.clone()));
+                continue;
+            };
+            match instance_patch(occurrence, &held_occurrence) {
+                Some(patch) => MsgraphEventInstanceAction::Update(Box::new(patch)),
+                None => continue,
+            }
+        };
+
+        let moved_to = held_overridden.and_then(|exception| exception.moved_to);
+        let first = moved_to.map_or(start.day(), |moved| start.day().min(moved.day()));
+        let last = moved_to.map_or(start.day(), |moved| start.day().max(moved.day()));
+        let midnight = |date: Date| format!("{date}T00:00:00Z");
+
+        changes.push(MsgraphEventInstanceChange {
+            original_start: start.to_graph(),
+            window: (
+                midnight(first.saturating_sub(Span::new().days(1))),
+                midnight(last.saturating_add(Span::new().days(2))),
+            ),
+            action,
+        });
+    }
+
+    Ok((changes, left_out))
+}
+
+/// The series, in full state, carried to the occurrence originally
+/// starting at `start`: the instance while nothing overrides it; `None` in
+/// a zone neither table knows.
+fn carried(series: &MsgraphEvent, start: OriginalStart) -> Option<MsgraphEvent> {
+    let from = series.start.as_option()?;
+    let to = series.end.as_option()?;
+    let span = from
+        .date_time
+        .parse::<DateTime>()
+        .ok()?
+        .until(to.date_time.parse::<DateTime>().ok()?)
+        .ok()?;
+
+    let local = match start {
+        OriginalStart::Date(date) => date.at(0, 0, 0, 0),
+        OriginalStart::Instant(instant) => {
+            let zone = match zone(from.time_zone.as_deref()) {
+                Zone::Utc => TimeZone::UTC,
+                Zone::Iana(name) => TimeZone::get(&name).ok()?,
+                Zone::Unknown(_) => return None,
+            };
+            instant.to_zoned(zone).datetime()
+        }
+    };
+
+    let wall = |local: DateTime, boundary: &MsgraphDateTimeTimeZone| MsgraphDateTimeTimeZone {
+        date_time: local.strftime("%Y-%m-%dT%H:%M:%S").to_string(),
+        time_zone: boundary.time_zone.clone(),
+    };
+
+    let mut occurrence = series.clone();
+    occurrence.start = MsgraphField::Set(wall(local, from));
+    occurrence.end = MsgraphField::Set(wall(local.checked_add(span).ok()?, to));
+
+    Some(occurrence)
+}
+
+/// The patch moving an instance from `held` to `occurrence`, the recurrence
+/// and the stash left to the series master; `None` when the two agree.
+fn instance_patch(mut occurrence: MsgraphEvent, held: &MsgraphEvent) -> Option<MsgraphEvent> {
+    occurrence.unset_unchanged(held);
+    occurrence.recurrence = MsgraphField::Unset;
+    occurrence.single_value_extended_properties = MsgraphField::Unset;
+
+    (occurrence != MsgraphEvent::default()).then_some(occurrence)
+}
 
 /// Projects one VEVENT onto an event, in full state.
 fn project(vevent: &IcalCst<'_>) -> Result<MsgraphEvent, MsgraphEventIcalError> {
@@ -1494,6 +1922,14 @@ fn has_prop(component: &IcalCst<'_>, name: &str) -> bool {
     component.items.iter().any(|item| match item {
         IcalItem::Prop(line) => line.name.get().eq_ignore_ascii_case(name),
         _ => false,
+    })
+}
+
+/// The first property of that name a component carries.
+fn find_prop<'c, 'a>(component: &'c IcalCst<'a>, name: &str) -> Option<&'c IcalLine<'a>> {
+    component.items.iter().find_map(|item| match item {
+        IcalItem::Prop(line) if line.name.get().eq_ignore_ascii_case(name) => Some(line),
+        _ => None,
     })
 }
 
@@ -3068,6 +3504,277 @@ mod tests {
             MsgraphEvent::instance_update_from_ical(carried.as_bytes(), held.as_bytes()).unwrap(),
             None
         );
+    }
+
+    /// The EXDATE of the 25 November occurrence.
+    const EXDATE: &str = "EXDATE;TZID=Europe/Paris:20261125T140000\r\n";
+
+    /// A daily series of four from 23 November at 14:00 in Paris, `extra`
+    /// in its master and `overrides` after it.
+    fn series(extra: &str, overrides: &str) -> String {
+        format!(
+            "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Test//EN\r\nBEGIN:VEVENT\r\n\
+             UID:series@x.org\r\nDTSTAMP:20261115T090000Z\r\n\
+             DTSTART;TZID=Europe/Paris:20261123T140000\r\n\
+             DTEND;TZID=Europe/Paris:20261123T150000\r\n\
+             RRULE:FREQ=DAILY;COUNT=4\r\nSUMMARY:Review\r\n{extra}END:VEVENT\r\n\
+             {overrides}END:VCALENDAR\r\n"
+        )
+    }
+
+    /// The override of the 24 November occurrence, from `start` to `end`
+    /// o'clock, as `summary`, with `extra`.
+    fn moved(start: &str, end: &str, summary: &str, extra: &str) -> String {
+        format!(
+            "BEGIN:VEVENT\r\nUID:series@x.org\r\nDTSTAMP:20261115T090000Z\r\n\
+             RECURRENCE-ID;TZID=Europe/Paris:20261124T140000\r\n\
+             DTSTART;TZID=Europe/Paris:20261124T{start}0000\r\n\
+             DTEND;TZID=Europe/Paris:20261124T{end}0000\r\n\
+             SUMMARY:{summary}\r\n{extra}END:VEVENT\r\n"
+        )
+    }
+
+    /// The patch an instance change carries, its other actions refused.
+    fn patch_of(change: &MsgraphEventInstanceChange) -> &MsgraphEvent {
+        match &change.action {
+            MsgraphEventInstanceAction::Update(patch) => patch,
+            action => panic!("a patch, not {action:?}"),
+        }
+    }
+
+    /// The wall times an instance patch moves its occurrence to.
+    fn times(patch: &MsgraphEvent) -> (&str, &str) {
+        let start = patch.start.as_option().unwrap();
+        let end = patch.end.as_option().unwrap();
+        assert_eq!(start.time_zone.as_deref(), Some("Europe/Paris"));
+        assert_eq!(end.time_zone.as_deref(), Some("Europe/Paris"));
+        (&start.date_time, &end.date_time)
+    }
+
+    #[test]
+    fn a_series_carries_its_exdate_and_override_to_their_instances() {
+        let document = series(EXDATE, &moved("16", "17", "Review", ""));
+
+        let series = MsgraphEventSeries::create_from_ical(document.as_bytes()).unwrap();
+
+        assert_eq!(
+            series.master,
+            MsgraphEvent::create_from_ical(document.as_bytes()).unwrap()
+        );
+        assert!(series.left_out.is_empty(), "{:?}", series.left_out);
+        let [moved, excluded] = series.instances.as_slice() else {
+            panic!("one patch and one delete: {:?}", series.instances);
+        };
+
+        assert_eq!(moved.original_start, "2026-11-24T13:00:00Z");
+        assert_eq!(moved.window, window("2026-11-23", "2026-11-26"));
+        let patch = patch_of(moved);
+        assert_eq!(times(patch), ("2026-11-24T16:00:00", "2026-11-24T17:00:00"));
+        assert_eq!(
+            patch,
+            &MsgraphEvent {
+                start: patch.start.clone(),
+                end: patch.end.clone(),
+                ..Default::default()
+            },
+            "the times alone"
+        );
+
+        assert_eq!(excluded.original_start, "2026-11-25T13:00:00Z");
+        assert_eq!(excluded.window, window("2026-11-24", "2026-11-27"));
+        assert_eq!(excluded.action, MsgraphEventInstanceAction::Delete);
+    }
+
+    #[test]
+    fn an_occurrence_cancelled_twice_or_by_its_status_is_deleted() {
+        let excluded = series(
+            "EXDATE;TZID=Europe/Paris:20261124T140000\r\n",
+            &moved("16", "17", "Review", ""),
+        );
+        let cancelled = series("", &moved("14", "15", "Review", "STATUS:CANCELLED\r\n"));
+
+        for document in [excluded, cancelled] {
+            let series = MsgraphEventSeries::create_from_ical(document.as_bytes()).unwrap();
+
+            let [change] = series.instances.as_slice() else {
+                panic!("one delete: {:?}", series.instances);
+            };
+            assert_eq!(change.original_start, "2026-11-24T13:00:00Z");
+            assert_eq!(change.action, MsgraphEventInstanceAction::Delete);
+        }
+    }
+
+    #[test]
+    fn an_update_writes_what_changed_of_the_instances() {
+        let held = "EXDATE;TZID=Europe/Paris:20261126T140000\r\n";
+        let base = series(held, &moved("16", "17", "Review", ""));
+        let document = series(&format!("{held}{EXDATE}"), &moved("17", "18", "Review", ""));
+
+        let series =
+            MsgraphEventSeries::update_from_ical(document.as_bytes(), base.as_bytes()).unwrap();
+
+        assert_eq!(
+            series.master,
+            MsgraphEvent::update_from_ical(document.as_bytes(), base.as_bytes()).unwrap()
+        );
+        assert!(series.left_out.is_empty(), "{:?}", series.left_out);
+        let [moved, excluded] = series.instances.as_slice() else {
+            panic!("one patch and one delete: {:?}", series.instances);
+        };
+
+        assert_eq!(moved.original_start, "2026-11-24T13:00:00Z");
+        let patch = patch_of(moved);
+        assert_eq!(times(patch), ("2026-11-24T17:00:00", "2026-11-24T18:00:00"));
+        assert!(patch.subject.is_unset());
+
+        assert_eq!(excluded.original_start, "2026-11-25T13:00:00Z");
+        assert_eq!(excluded.action, MsgraphEventInstanceAction::Delete);
+    }
+
+    #[test]
+    fn a_dropped_override_takes_the_series_back() {
+        let base = series("", &moved("16", "17", "Review, moved", ""));
+        let document = series("", "");
+
+        let series =
+            MsgraphEventSeries::update_from_ical(document.as_bytes(), base.as_bytes()).unwrap();
+
+        let [reverted] = series.instances.as_slice() else {
+            panic!("one patch: {:?}", series.instances);
+        };
+        assert_eq!(reverted.original_start, "2026-11-24T13:00:00Z");
+        let patch = patch_of(reverted);
+        assert_eq!(times(patch), ("2026-11-24T14:00:00", "2026-11-24T15:00:00"));
+        assert_eq!(
+            patch.subject.as_option().map(String::as_str),
+            Some("Review")
+        );
+    }
+
+    #[test]
+    fn an_update_moving_the_series_writes_its_instances_again() {
+        let base = series(EXDATE, &moved("16", "17", "Review", ""));
+        let document = series("EXDATE;TZID=Europe/Paris:20261125T150000\r\n", "")
+            .replace(
+                "DTEND;TZID=Europe/Paris:20261123T150000",
+                "DTEND;TZID=Europe/Paris:20261123T160000",
+            )
+            .replace(
+                "DTSTART;TZID=Europe/Paris:20261123T140000",
+                "DTSTART;TZID=Europe/Paris:20261123T150000",
+            );
+
+        let series =
+            MsgraphEventSeries::update_from_ical(document.as_bytes(), base.as_bytes()).unwrap();
+
+        assert!(series.master.start.as_option().is_some());
+        assert!(series.left_out.is_empty(), "{:?}", series.left_out);
+        let [excluded] = series.instances.as_slice() else {
+            panic!("one delete: {:?}", series.instances);
+        };
+        assert_eq!(excluded.original_start, "2026-11-25T14:00:00Z");
+        assert_eq!(excluded.action, MsgraphEventInstanceAction::Delete);
+    }
+
+    #[test]
+    fn an_override_moved_far_is_listed_where_it_stands() {
+        let far = moved("16", "17", "Review", "").replace(
+            "DTSTART;TZID=Europe/Paris:20261124T160000",
+            "DTSTART;TZID=Europe/Paris:20261204T160000",
+        );
+        let far = far.replace(
+            "DTEND;TZID=Europe/Paris:20261124T170000",
+            "DTEND;TZID=Europe/Paris:20261204T170000",
+        );
+        let base = series("", &far);
+        let document = series("", &moved("16", "17", "Review", ""));
+
+        let series =
+            MsgraphEventSeries::update_from_ical(document.as_bytes(), base.as_bytes()).unwrap();
+
+        let [moved] = series.instances.as_slice() else {
+            panic!("one patch: {:?}", series.instances);
+        };
+        assert_eq!(moved.window, window("2026-11-23", "2026-12-06"));
+    }
+
+    #[test]
+    fn what_graph_cannot_hold_of_a_series_is_named() {
+        let base = series("EXDATE;TZID=Europe/Paris:20261126T140000\r\n", "");
+        let ranged = "BEGIN:VEVENT\r\nUID:series@x.org\r\n\
+             RECURRENCE-ID;RANGE=THISANDFUTURE;TZID=Europe/Paris:20261125T140000\r\n\
+             DTSTART;TZID=Europe/Paris:20261125T090000\r\n\
+             DTEND;TZID=Europe/Paris:20261125T100000\r\n\
+             SUMMARY:Review\r\nEND:VEVENT\r\n";
+        let document = series(
+            "RDATE;TZID=Europe/Paris:20261201T140000\r\n\
+             EXDATE;TZID=Nowhere/Land:20261125T140000\r\n",
+            &format!("{}{ranged}", moved("16", "17", "Review", "X-OWN:kept\r\n")),
+        );
+
+        let series =
+            MsgraphEventSeries::update_from_ical(document.as_bytes(), base.as_bytes()).unwrap();
+
+        let mut left_out = series.left_out.clone();
+        left_out.sort();
+        assert_eq!(
+            left_out,
+            [
+                "EXDATE;TZID=Europe/Paris:20261126T140000",
+                "EXDATE;TZID=Nowhere/Land:20261125T140000",
+                "RDATE;TZID=Europe/Paris:20261201T140000",
+                "RECURRENCE-ID;RANGE=THISANDFUTURE;TZID=Europe/Paris:20261125T140000",
+                "X-OWN:kept",
+            ]
+        );
+        let [moved] = series.instances.as_slice() else {
+            panic!("one patch: {:?}", series.instances);
+        };
+        assert_eq!(moved.original_start, "2026-11-24T13:00:00Z");
+
+        let lone = document.replace("RRULE:FREQ=DAILY;COUNT=4\r\n", "");
+        let lone = MsgraphEventSeries::create_from_ical(lone.as_bytes()).unwrap();
+        assert!(lone.instances.is_empty(), "{:?}", lone.instances);
+        assert!(
+            lone.left_out.contains(&String::from(
+                "RECURRENCE-ID;TZID=Europe/Paris:20261124T140000"
+            )),
+            "{:?}",
+            lone.left_out
+        );
+    }
+
+    #[test]
+    fn a_change_picks_its_instance_from_a_listing() {
+        let listed = |original: &str| MsgraphEvent {
+            original_start: Some(original.into()),
+            ..Default::default()
+        };
+
+        let document = series(EXDATE, "");
+        let series = MsgraphEventSeries::create_from_ical(document.as_bytes()).unwrap();
+        let [excluded] = series.instances.as_slice() else {
+            panic!("one delete: {:?}", series.instances);
+        };
+
+        assert!(excluded.is_instance(&listed("2026-11-25T13:00:00Z")));
+        assert!(excluded.is_instance(&listed("2026-11-25T13:00:00.0000000Z")));
+        assert!(!excluded.is_instance(&listed("2026-11-24T13:00:00Z")));
+        assert!(!excluded.is_instance(&MsgraphEvent::default()));
+
+        let all_day = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:days@x.org\r\n\
+            DTSTART;VALUE=DATE:20261123\r\nDTEND;VALUE=DATE:20261124\r\n\
+            RRULE:FREQ=DAILY;COUNT=4\r\nEXDATE;VALUE=DATE:20261125\r\n\
+            SUMMARY:Off\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+        let series = MsgraphEventSeries::create_from_ical(all_day.as_bytes()).unwrap();
+        let [excluded] = series.instances.as_slice() else {
+            panic!("one delete: {:?}", series.instances);
+        };
+
+        assert_eq!(excluded.original_start, "2026-11-25");
+        assert_eq!(excluded.window, window("2026-11-24", "2026-11-27"));
+        assert!(excluded.is_instance(&listed("2026-11-25T00:00:00Z")));
+        assert!(!excluded.is_instance(&listed("2026-11-24T00:00:00Z")));
     }
 
     /// A read Graph answered in UTC, as it does unless asked for a zone.
