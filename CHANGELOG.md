@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [0.9.3] - 2026-11-16
+
+### Changed
+
+- Changed the jiff dependency to 1 and ical-rs to 0.7.1, behind the `ical` feature.
+
 ## [0.9.2] - 2026-11-15
 
 ### Added
@@ -289,7 +295,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Added the contacts surface: contact folders and contacts, with delta.
 - Added `MsgraphClientStd` (`client` feature), a std blocking client with a `connect` constructor behind the TLS features.
 
-[unreleased]: https://github.com/pimalaya/io-msgraph/compare/v0.9.2..HEAD
+[unreleased]: https://github.com/pimalaya/io-msgraph/compare/v0.9.3..HEAD
+[0.9.3]: https://github.com/pimalaya/io-msgraph/compare/v0.9.2..v0.9.3
 [0.9.2]: https://github.com/pimalaya/io-msgraph/compare/v0.9.1..v0.9.2
 [0.9.1]: https://github.com/pimalaya/io-msgraph/compare/v0.9.0..v0.9.1
 [0.9.0]: https://github.com/pimalaya/io-msgraph/compare/v0.8.0..v0.9.0

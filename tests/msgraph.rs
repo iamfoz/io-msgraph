@@ -745,7 +745,7 @@ fn ical_instance_windows() {
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
     let today = Timestamp::from_second(now.as_secs() as i64)
         .unwrap()
-        .to_zoned(TimeZone::UTC)
+        .to_zoned_datetime(TimeZone::UTC)
         .date();
     let years = Span::new().years(MSGRAPH_INSTANCES_MAX_YEARS);
     let within = (

@@ -297,7 +297,9 @@ impl Caller {
     /// zone that wrote them, so this is the written date whenever that zone
     /// is within twelve hours of this one.
     fn date_of(&self, value: &MsgraphDateTimeTimeZone) -> Option<Date> {
-        let local = instant(value)?.to_zoned(self.tz.clone()).datetime();
+        let local = instant(value)?
+            .to_zoned_datetime(self.tz.clone())
+            .datetime();
 
         if local.time() >= Time::constant(12, 0, 0, 0) {
             local.date().tomorrow().ok()
@@ -335,7 +337,7 @@ impl Caller {
     /// zone, so Graph keeps the midnight of the date it falls on here.
     fn completed_slot(&self, line: &IcalLine<'_>) -> Option<MsgraphDateTimeTimeZone> {
         let instant = instant(&self.date_slot(line)?)?;
-        let local = instant.to_zoned(self.tz.clone()).datetime();
+        let local = instant.to_zoned_datetime(self.tz.clone()).datetime();
 
         Some(MsgraphDateTimeTimeZone {
             date_time: graph_date_time(local),
@@ -928,7 +930,7 @@ fn instant(value: &MsgraphDateTimeTimeZone) -> Option<Timestamp> {
         Zone::Iana(name) => TimeZone::get(&name).unwrap_or(TimeZone::UTC),
         Zone::Utc | Zone::Unknown(_) => TimeZone::UTC,
     };
-    Some(local.to_zoned(tz).ok()?.timestamp())
+    Some(local.to_zoned_datetime(tz).ok()?.timestamp())
 }
 
 /// A wall time in Graph's form, `YYYY-MM-DDTHH:MM:SS`.
@@ -1086,7 +1088,11 @@ mod tests {
             if let MsgraphField::Set(value) = field {
                 let date = value.date_time.get(..10).unwrap().parse::<Date>().unwrap();
                 let tz = TimeZone::get(value.time_zone.as_deref().unwrap()).unwrap();
-                let utc = date.at(0, 0, 0, 0).to_zoned(tz).unwrap().timestamp();
+                let utc = date
+                    .at(0, 0, 0, 0)
+                    .to_zoned_datetime(tz)
+                    .unwrap()
+                    .timestamp();
                 *value = MsgraphDateTimeTimeZone {
                     date_time: utc.strftime("%Y-%m-%dT%H:%M:%S.0000000").to_string(),
                     time_zone: Some("UTC".into()),

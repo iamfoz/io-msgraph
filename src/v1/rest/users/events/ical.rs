@@ -404,7 +404,7 @@ impl MsgraphPatternedRecurrence {
         let end = end.min(within.1);
 
         let instant = |date: Date| -> Option<String> {
-            let timestamp: Timestamp = date.to_zoned(TimeZone::UTC).ok()?.timestamp();
+            let timestamp: Timestamp = date.to_zoned_datetime(TimeZone::UTC).ok()?.timestamp();
             Some(timestamp.strftime("%Y-%m-%dT%H:%M:%SZ").to_string())
         };
         let mut windows = Vec::new();
@@ -514,7 +514,7 @@ impl MsgraphEventInstanceChange {
             Err(_) => self
                 .original_start
                 .parse::<Date>()
-                .is_ok_and(|date| original.to_zoned(TimeZone::UTC).date() == date),
+                .is_ok_and(|date| original.to_zoned_datetime(TimeZone::UTC).date() == date),
         }
     }
 }
@@ -615,14 +615,16 @@ impl OriginalStart {
             }
         };
 
-        Some(Self::Instant(local.to_zoned(zone).ok()?.timestamp()))
+        Some(Self::Instant(
+            local.to_zoned_datetime(zone).ok()?.timestamp(),
+        ))
     }
 
     /// The UTC date the occurrence starts on.
     fn day(self) -> Date {
         match self {
             Self::Date(date) => date,
-            Self::Instant(instant) => instant.to_zoned(TimeZone::UTC).date(),
+            Self::Instant(instant) => instant.to_zoned_datetime(TimeZone::UTC).date(),
         }
     }
 
@@ -872,7 +874,7 @@ fn carried(series: &MsgraphEvent, start: OriginalStart) -> Option<MsgraphEvent> 
                 Zone::Iana(name) => TimeZone::get(&name).ok()?,
                 Zone::Unknown(_) => return None,
             };
-            instant.to_zoned(zone).datetime()
+            instant.to_zoned_datetime(zone).datetime()
         }
     };
 
@@ -1399,7 +1401,7 @@ fn local_boundary(
         .parse::<DateTime>()
         .ok()?;
     let local = utc
-        .to_zoned(TimeZone::UTC)
+        .to_zoned_datetime(TimeZone::UTC)
         .ok()?
         .with_time_zone(TimeZone::get(&name).ok()?)
         .datetime();
@@ -1489,7 +1491,7 @@ fn recurrence_id(
         .and_then(|start| start.time_zone.as_deref());
 
     if all_day {
-        let date = instant.to_zoned(TimeZone::UTC).date();
+        let date = instant.to_zoned_datetime(TimeZone::UTC).date();
         return Some(IcalProp {
             name: IcalPropName::Kind(IcalPropKind::RecurrenceId),
             params: vec![IcalParam::Value("DATE".into())],
@@ -1499,7 +1501,9 @@ fn recurrence_id(
 
     match zone(start_zone) {
         Zone::Iana(name) => {
-            let local = instant.to_zoned(TimeZone::get(&name).ok()?).datetime();
+            let local = instant
+                .to_zoned_datetime(TimeZone::get(&name).ok()?)
+                .datetime();
             zones.insert(name.clone());
             Some(IcalProp {
                 name: IcalPropName::Kind(IcalPropKind::RecurrenceId),
@@ -1610,7 +1614,7 @@ fn until(
         _ => TimeZone::UTC,
     };
 
-    let last = end.at(23, 59, 59, 0).to_zoned(zone).ok()?;
+    let last = end.at(23, 59, 59, 0).to_zoned_datetime(zone).ok()?;
     Some(last.timestamp().strftime("%Y%m%dT%H%M%SZ").to_string())
 }
 
@@ -1844,7 +1848,7 @@ pub(crate) fn recurrence(
                 && let Ok(series) = TimeZone::get(&name)
             {
                 let instant = DateTime::strptime("%Y%m%dT%H%M%S", local)
-                    .and_then(|local| local.to_zoned(TimeZone::UTC))
+                    .and_then(|local| local.to_zoned_datetime(TimeZone::UTC))
                     .map_err(|_| unsupported())?;
                 end = instant.with_time_zone(series).date();
             }
@@ -2049,7 +2053,7 @@ fn anchor(event: &MsgraphEvent) -> i64 {
         .as_option()
         .and_then(|start| start.date_time.get(..10))
         .and_then(|date| date.parse::<Date>().ok())
-        .and_then(|date| date.to_zoned(TimeZone::UTC).ok())
+        .and_then(|date| date.to_zoned_datetime(TimeZone::UTC).ok())
         .map_or(0, |zoned| zoned.timestamp().as_second())
 }
 
@@ -2887,7 +2891,7 @@ mod tests {
             let from: Timestamp = from.parse().unwrap();
             let to: Timestamp = to.parse().unwrap();
             let limit = from
-                .to_zoned(TimeZone::UTC)
+                .to_zoned_datetime(TimeZone::UTC)
                 .checked_add(Span::new().years(MSGRAPH_INSTANCES_MAX_YEARS))
                 .unwrap()
                 .timestamp();
