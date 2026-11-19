@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+## [0.9.4] - 2026-11-19
+
 ### Added
 
 - Added `MsgraphCalendarPermanentDelete`, `MsgraphContactFolderPermanentDelete`, `MsgraphMailFolderPermanentDelete` and `MsgraphMessagePermanentDelete`, with their `MsgraphClientStd` methods (`calendar_permanent_delete`, ...): a delete past Deleted Items, where a plain delete leaves the resource.
@@ -299,7 +301,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Added the contacts surface: contact folders and contacts, with delta.
 - Added `MsgraphClientStd` (`client` feature), a std blocking client with a `connect` constructor behind the TLS features.
 
-[unreleased]: https://github.com/pimalaya/io-msgraph/compare/v0.9.3..HEAD
+[Unreleased]: https://github.com/pimalaya/io-msgraph/compare/v0.9.4..HEAD
+[0.9.4]: https://github.com/pimalaya/io-msgraph/compare/v0.9.3..v0.9.4
 [0.9.3]: https://github.com/pimalaya/io-msgraph/compare/v0.9.2..v0.9.3
 [0.9.2]: https://github.com/pimalaya/io-msgraph/compare/v0.9.1..v0.9.2
 [0.9.1]: https://github.com/pimalaya/io-msgraph/compare/v0.9.0..v0.9.1
