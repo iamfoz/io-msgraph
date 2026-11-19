@@ -25,9 +25,10 @@
 //!
 //! [`account`] only reads. [`mail`], [`contacts`], [`calendars`] and
 //! [`todo`] walk the CRUD surface inside a throwaway folder, calendar or
-//! task list that [`with_cleanup`] deletes however the run ends; the
-//! messages sent to the mailbox itself land in its inbox and sent items,
-//! and the cleanup sweeps them by subject. With the `ical` and `vcard`
+//! task list that [`with_cleanup`] deletes however the run ends, for good
+//! rather than into Deleted Items (Graph has no such delete for a task
+//! list, which lands there); the messages sent to the mailbox itself land
+//! in its inbox and sent items, and the cleanup sweeps them by subject. With the `ical` and `vcard`
 //! features, [`ical`], [`ical_todo`] and [`vcard`] round-trip an event, a
 //! task and a contact through the projections, [`ical_instances`] writes
 //! single occurrences of a series through their instances, which
@@ -163,7 +164,7 @@ fn mail() {
         },
         |client| {
             sweep(client, &sent_subject);
-            if let Err(err) = client.mail_folder_delete(&folder_id) {
+            if let Err(err) = client.mail_folder_permanent_delete(&folder_id) {
                 report_leftover("mail folder", &folder_id, &err);
             }
         },
@@ -186,7 +187,7 @@ fn contacts() {
             contacts_delta(client, &folder_id, &name);
         },
         |client| {
-            if let Err(err) = client.contact_folder_delete(&folder_id) {
+            if let Err(err) = client.contact_folder_permanent_delete(&folder_id) {
                 report_leftover("contact folder", &folder_id, &err);
             }
         },
@@ -211,7 +212,7 @@ fn calendars() {
             events_delta(client, &calendar_id, &name);
         },
         |client| {
-            if let Err(err) = client.calendar_delete(&calendar_id) {
+            if let Err(err) = client.calendar_permanent_delete(&calendar_id) {
                 report_leftover("calendar", &calendar_id, &err);
             }
         },
@@ -310,7 +311,7 @@ fn ical() {
             );
         },
         |client| {
-            if let Err(err) = client.calendar_delete(&calendar_id) {
+            if let Err(err) = client.calendar_permanent_delete(&calendar_id) {
                 report_leftover("calendar", &calendar_id, &err);
             }
         },
@@ -423,7 +424,7 @@ fn ical_series() {
             MsgraphEvent::from_ical(read.as_bytes()).expect("the series document projects back");
         },
         |client| {
-            if let Err(err) = client.calendar_delete(&calendar_id) {
+            if let Err(err) = client.calendar_permanent_delete(&calendar_id) {
                 report_leftover("calendar", &calendar_id, &err);
             }
         },
@@ -607,7 +608,7 @@ fn ical_instances() {
             );
         },
         |client| {
-            if let Err(err) = client.calendar_delete(&calendar_id) {
+            if let Err(err) = client.calendar_permanent_delete(&calendar_id) {
                 report_leftover("calendar", &calendar_id, &err);
             }
         },
@@ -720,7 +721,7 @@ fn ical_series_with_its_instances() {
             }
         },
         |client| {
-            if let Err(err) = client.calendar_delete(&calendar_id) {
+            if let Err(err) = client.calendar_permanent_delete(&calendar_id) {
                 report_leftover("calendar", &calendar_id, &err);
             }
         },
@@ -822,7 +823,7 @@ fn ical_instance_windows() {
             assert_eq!(status, Some(400), "Graph refuses ten years at once");
         },
         |client| {
-            if let Err(err) = client.calendar_delete(&calendar_id) {
+            if let Err(err) = client.calendar_permanent_delete(&calendar_id) {
                 report_leftover("calendar", &calendar_id, &err);
             }
         },
@@ -892,7 +893,7 @@ fn ical_shapes() {
             }
         },
         |client| {
-            if let Err(err) = client.calendar_delete(&calendar_id) {
+            if let Err(err) = client.calendar_permanent_delete(&calendar_id) {
                 report_leftover("calendar", &calendar_id, &err);
             }
         },
@@ -1077,7 +1078,7 @@ fn vcard() {
             assert_same_contact(&edited, &refetched.to_vcard());
         },
         |client| {
-            if let Err(err) = client.contact_folder_delete(&folder_id) {
+            if let Err(err) = client.contact_folder_permanent_delete(&folder_id) {
                 report_leftover("contact folder", &folder_id, &err);
             }
         },
@@ -1143,7 +1144,7 @@ fn mail_folder_nest(client: &mut MsgraphClientStd, name: &str, parent: &str) -> 
     match client.mail_folder_move(&folder.id, parent) {
         Ok(moved) => moved.response.id,
         Err(err) => {
-            if let Err(err) = client.mail_folder_delete(&folder.id) {
+            if let Err(err) = client.mail_folder_permanent_delete(&folder.id) {
                 report_leftover("mail folder", &folder.id, &err);
             }
             panic!("mail folder move: {err:?}");
@@ -1404,7 +1405,7 @@ fn send(client: &mut MsgraphClientStd, address: &str, subject: &str) {
 fn sweep(client: &mut MsgraphClientStd, subject: &str) {
     for folder in ["inbox", "sentitems"] {
         for id in with_subject(client, folder, subject) {
-            if let Err(err) = client.message_delete(&id) {
+            if let Err(err) = client.message_permanent_delete(&id) {
                 report_leftover("message", &id, &err);
             }
         }

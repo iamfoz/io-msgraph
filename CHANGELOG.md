@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+### Added
+
+- Added `MsgraphCalendarPermanentDelete`, `MsgraphContactFolderPermanentDelete`, `MsgraphMailFolderPermanentDelete` and `MsgraphMessagePermanentDelete`, with their `MsgraphClientStd` methods (`calendar_permanent_delete`, ...): a delete past Deleted Items, where a plain delete leaves the resource.
+
 ## [0.9.3] - 2026-11-16
 
 ### Changed

@@ -12,6 +12,7 @@ pub mod create;
 pub mod delete;
 pub mod get;
 pub mod list;
+pub mod permanent_delete;
 pub mod update;
 
 /// A contact folder in a user's mailbox. Doubles as the create/update

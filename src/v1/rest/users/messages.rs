@@ -20,6 +20,7 @@ pub mod get;
 pub mod get_raw;
 pub mod list;
 pub mod r#move;
+pub mod permanent_delete;
 pub mod send;
 pub mod update;
 

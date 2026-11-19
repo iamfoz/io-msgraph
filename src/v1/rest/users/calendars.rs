@@ -13,6 +13,7 @@ pub mod create;
 pub mod delete;
 pub mod get;
 pub mod list;
+pub mod permanent_delete;
 pub mod update;
 
 /// A calendar of the user. Doubles as the create/update body.

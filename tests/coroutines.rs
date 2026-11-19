@@ -26,7 +26,7 @@ use io_msgraph::v1::{
         mail_folders::{
             MsgraphMailFolder, create::MsgraphMailFolderCreate, delete::MsgraphMailFolderDelete,
             list::MsgraphMailFoldersList, list::MsgraphMailFoldersListParams,
-            update::MsgraphMailFolderUpdate,
+            permanent_delete::MsgraphMailFolderPermanentDelete, update::MsgraphMailFolderUpdate,
         },
         messages::{
             MsgraphEmailAddress, MsgraphMessage,
@@ -285,6 +285,27 @@ fn deletes_folder_issues_delete() {
         request.starts_with("DELETE /v1.0/me/mailFolders/AAA"),
         "got: {request}"
     );
+}
+
+/// A permanent delete posts an empty JSON object: Graph refuses the call
+/// without a body (400) or without its type (400 again).
+#[test]
+fn permanent_delete_posts_an_empty_object() {
+    let mut coroutine = MsgraphMailFolderPermanentDelete::new(&auth(), "me", "AAA").unwrap();
+    let (result, written) = run(&mut coroutine, &empty_response("HTTP/1.1 204 No Content"));
+
+    result.unwrap();
+
+    let request = String::from_utf8_lossy(&written);
+    assert!(
+        request.starts_with("POST /v1.0/me/mailFolders/AAA/permanentDelete "),
+        "got: {request}"
+    );
+    assert!(
+        request.contains("Content-Type: application/json"),
+        "got: {request}"
+    );
+    assert!(request.ends_with("\r\n\r\n{}"), "got: {request}");
 }
 
 #[test]

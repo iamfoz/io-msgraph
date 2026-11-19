@@ -63,6 +63,7 @@ use crate::{
             list::{
                 MsgraphCalendarsList, MsgraphCalendarsListParams, MsgraphCalendarsListResponse,
             },
+            permanent_delete::MsgraphCalendarPermanentDelete,
             update::MsgraphCalendarUpdate,
         },
         contact_folders::{
@@ -75,6 +76,7 @@ use crate::{
                 MsgraphContactFoldersList, MsgraphContactFoldersListParams,
                 MsgraphContactFoldersListResponse,
             },
+            permanent_delete::MsgraphContactFolderPermanentDelete,
             update::MsgraphContactFolderUpdate,
         },
         contacts::{
@@ -110,6 +112,7 @@ use crate::{
                 MsgraphMailFoldersListResponse,
             },
             r#move::MsgraphMailFolderMove,
+            permanent_delete::MsgraphMailFolderPermanentDelete,
             update::MsgraphMailFolderUpdate,
         },
         messages::{
@@ -132,6 +135,7 @@ use crate::{
             get_raw::MsgraphMessageGetRaw,
             list::{MsgraphMessagesList, MsgraphMessagesListParams, MsgraphMessagesListResponse},
             r#move::MsgraphMessageMove,
+            permanent_delete::MsgraphMessagePermanentDelete,
             send::MsgraphMessageSend,
             update::MsgraphMessageUpdate,
         },
@@ -515,6 +519,15 @@ impl MsgraphClientStd {
         self.run(coroutine)
     }
 
+    /// Permanently deletes the mail folder `id`, past Deleted Items.
+    pub fn mail_folder_permanent_delete(
+        &mut self,
+        id: &str,
+    ) -> Result<MsgraphSendOutput<MsgraphNoResponse>, MsgraphClientStdError> {
+        let coroutine = MsgraphMailFolderPermanentDelete::new(&self.auth, &self.user_id, id)?;
+        self.run(coroutine)
+    }
+
     /// Copies a mail folder into a destination folder.
     pub fn mail_folder_copy(
         &mut self,
@@ -588,6 +601,15 @@ impl MsgraphClientStd {
         id: &str,
     ) -> Result<MsgraphSendOutput<MsgraphNoResponse>, MsgraphClientStdError> {
         let coroutine = MsgraphContactFolderDelete::new(&self.auth, &self.user_id, id)?;
+        self.run(coroutine)
+    }
+
+    /// Permanently deletes the contact folder `id`, past Deleted Items.
+    pub fn contact_folder_permanent_delete(
+        &mut self,
+        id: &str,
+    ) -> Result<MsgraphSendOutput<MsgraphNoResponse>, MsgraphClientStdError> {
+        let coroutine = MsgraphContactFolderPermanentDelete::new(&self.auth, &self.user_id, id)?;
         self.run(coroutine)
     }
 
@@ -747,6 +769,15 @@ impl MsgraphClientStd {
         id: &str,
     ) -> Result<MsgraphSendOutput<MsgraphNoResponse>, MsgraphClientStdError> {
         let coroutine = MsgraphCalendarDelete::new(&self.auth, &self.user_id, id)?;
+        self.run(coroutine)
+    }
+
+    /// Permanently deletes the calendar `id`, past Deleted Items.
+    pub fn calendar_permanent_delete(
+        &mut self,
+        id: &str,
+    ) -> Result<MsgraphSendOutput<MsgraphNoResponse>, MsgraphClientStdError> {
+        let coroutine = MsgraphCalendarPermanentDelete::new(&self.auth, &self.user_id, id)?;
         self.run(coroutine)
     }
 
@@ -1129,6 +1160,15 @@ impl MsgraphClientStd {
         id: &str,
     ) -> Result<MsgraphSendOutput<MsgraphNoResponse>, MsgraphClientStdError> {
         let coroutine = MsgraphMessageDelete::new(&self.auth, &self.user_id, id)?;
+        self.run(coroutine)
+    }
+
+    /// Permanently deletes the message `id`, past Deleted Items.
+    pub fn message_permanent_delete(
+        &mut self,
+        id: &str,
+    ) -> Result<MsgraphSendOutput<MsgraphNoResponse>, MsgraphClientStdError> {
+        let coroutine = MsgraphMessagePermanentDelete::new(&self.auth, &self.user_id, id)?;
         self.run(coroutine)
     }
 
