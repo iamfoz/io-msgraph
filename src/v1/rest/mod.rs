@@ -7,5 +7,6 @@
 //!
 //! <https://learn.microsoft.com/en-us/graph/api/overview>
 
+#[cfg(feature = "client")]
 pub mod batch;
 pub mod users;

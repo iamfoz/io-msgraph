@@ -22,11 +22,13 @@ This library is composed of 3 feature-gated layers:
 
 ## Features
 
+- **I/O-free coroutines** (requires `client` feature, enabled by default): no_std state machines, usable from any blocking or async runtime. Without it, only the vocabulary is compiled: resource types, field selectors, query serializer, iCalendar and vCard projections.
 - **Mail**: folders, messages and attachments, raw MIME downloads, drafts and sending.
 - **Contacts, calendars and To Do**: contact folders, calendars and events, task lists and their tasks.
 - **Incremental sync**: delta queries return only what changed since the last round.
 - **Batching**: up to 20 requests in one HTTP call.
 - **iCalendar and vCard** (`ical`, `vcard` features): events and tasks as iCalendar, contacts as vCard, and back.
+- **Blocking client** wrapping any stream you opened yourself (requires `std` feature).
 - **Full client**: TLS via Rustls (`rustls-ring` default, `rustls-aws`) or Native TLS (`native-tls`).
 
 > [!TIP]

@@ -8,9 +8,13 @@ use alloc::string::String;
 
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "client")]
 pub mod create;
+#[cfg(feature = "client")]
 pub mod delete;
+#[cfg(feature = "client")]
 pub mod get_raw;
+#[cfg(feature = "client")]
 pub mod list;
 
 /// A message attachment.

@@ -12,9 +12,11 @@ pub mod calendars;
 pub mod contact_folders;
 pub mod contacts;
 pub mod events;
+#[cfg(feature = "client")]
 pub mod get;
 pub mod mail_folders;
 pub mod messages;
+#[cfg(feature = "client")]
 pub mod send_mail;
 pub mod todo;
 

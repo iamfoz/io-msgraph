@@ -11,17 +11,29 @@ use serde::{Deserialize, Deserializer, Serialize};
 use crate::v1::{field::MsgraphField, rest::users::contacts::MsgraphSingleValueExtendedProperty};
 
 pub mod attachments;
+#[cfg(feature = "client")]
 pub mod copy;
+#[cfg(feature = "client")]
 pub mod create;
+#[cfg(feature = "client")]
 pub mod create_mime;
+#[cfg(feature = "client")]
 pub mod delete;
+#[cfg(feature = "client")]
 pub mod delta;
+#[cfg(feature = "client")]
 pub mod get;
+#[cfg(feature = "client")]
 pub mod get_raw;
+#[cfg(feature = "client")]
 pub mod list;
+#[cfg(feature = "client")]
 pub mod r#move;
+#[cfg(feature = "client")]
 pub mod permanent_delete;
+#[cfg(feature = "client")]
 pub mod send;
+#[cfg(feature = "client")]
 pub mod update;
 
 /// A message in a mail folder. Doubles as the create/update body, where

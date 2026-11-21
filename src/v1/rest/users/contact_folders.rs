@@ -7,12 +7,19 @@ use alloc::string::String;
 
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "client")]
 pub mod child_folders;
+#[cfg(feature = "client")]
 pub mod create;
+#[cfg(feature = "client")]
 pub mod delete;
+#[cfg(feature = "client")]
 pub mod get;
+#[cfg(feature = "client")]
 pub mod list;
+#[cfg(feature = "client")]
 pub mod permanent_delete;
+#[cfg(feature = "client")]
 pub mod update;
 
 /// A contact folder in a user's mailbox. Doubles as the create/update

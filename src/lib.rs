@@ -22,8 +22,13 @@
 //! ## Layers and features
 //!
 //! The crate has two of the three standard Pimalaya layers; there is no
-//! CLI. The always-present no_std core holds the I/O-free coroutines,
-//! the whole Microsoft Graph REST logic. The `client` feature adds
+//! CLI. The always-present no_std core holds the vocabulary: the
+//! resource types, the field selectors, the OData query serializer and
+//! the `ical` and `vcard` projections under their own feature. The
+//! `client` feature, on by default, adds the I/O-free coroutines, the
+//! whole Microsoft Graph REST logic ([`coroutine`], [`v1::send`],
+//! [`v1::page`] and every operation module under [`v1::rest`]), with
+//! io-http, base64-codec, log and url. The `std` feature adds
 //! [`v1::client::MsgraphClientStd`], a std blocking client over any
 //! stream, whose `connect` constructor opens the TCP/TLS connection
 //! itself behind a TLS feature (`rustls-ring` by default, `rustls-aws`,
@@ -170,8 +175,9 @@
 //! ```
 
 extern crate alloc;
-#[cfg(feature = "client")]
+#[cfg(feature = "std")]
 extern crate std;
 
+#[cfg(feature = "client")]
 pub mod coroutine;
 pub mod v1;

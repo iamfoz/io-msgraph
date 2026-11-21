@@ -9,11 +9,17 @@ use serde::{Deserialize, Serialize};
 
 use crate::v1::{field::MsgraphField, rest::users::messages::MsgraphEmailAddress};
 
+#[cfg(feature = "client")]
 pub mod create;
+#[cfg(feature = "client")]
 pub mod delete;
+#[cfg(feature = "client")]
 pub mod get;
+#[cfg(feature = "client")]
 pub mod list;
+#[cfg(feature = "client")]
 pub mod permanent_delete;
+#[cfg(feature = "client")]
 pub mod update;
 
 /// A calendar of the user. Doubles as the create/update body.

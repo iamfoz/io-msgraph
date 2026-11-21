@@ -23,13 +23,19 @@ use crate::v1::{
 };
 
 pub mod checklist_items;
+#[cfg(feature = "client")]
 pub mod create;
+#[cfg(feature = "client")]
 pub mod delete;
+#[cfg(feature = "client")]
 pub mod delta;
+#[cfg(feature = "client")]
 pub mod get;
 #[cfg(feature = "ical")]
 pub mod ical;
+#[cfg(feature = "client")]
 pub mod list;
+#[cfg(feature = "client")]
 pub mod update;
 
 /// A To Do task (Graph's `todoTask`). Doubles as the create/update

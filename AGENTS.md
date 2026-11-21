@@ -38,7 +38,7 @@ Check the structure yourself against the strict rules (CAIRN.md §8): a discover
 
 - Run every cargo command through the nix devshell: `nix develop --command cargo <...>`.
 - Run `cargo fmt` on the crate after finishing code changes.
-- io-msgraph is an I/O-free library: the coroutines take no stream and build on io-http's, and every layer above them sits behind a feature (`client` for the blocking client, `rustls-ring`, `rustls-aws` or `native-tls` for the full client, `ical` and `vcard` for the iCalendar and vCard projections, plus `schemars`). Build both sides of a gate you touch.
+- io-msgraph is an I/O-free library: the coroutines take no stream and build on io-http's, and every layer above them sits behind a feature (`client` for the coroutines and io-http, base64-codec, log and url, `std` for the blocking client, `rustls-ring`, `rustls-aws` or `native-tls` for the full client, `ical` and `vcard` for the iCalendar and vCard projections, plus `schemars`). Build both sides of a gate you touch.
 - Check the bare core too: `cargo build --no-default-features` must stay no_std, with no std leak.
 - The tree follows the API version: the version-agnostic coroutine contract stays at the crate root, everything else lives under `v1`, with one module per Microsoft Graph REST resource under `v1::rest`.
 - Public items carry the `Msgraph` domain prefix.

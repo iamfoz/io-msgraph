@@ -5,10 +5,12 @@
 //! listing answers and the coroutine following its links, and `query`
 //! turns a params struct into OData query pairs.
 
-#[cfg(feature = "client")]
+#[cfg(feature = "std")]
 pub mod client;
 pub mod field;
+#[cfg(feature = "client")]
 pub mod page;
 pub mod query;
 pub mod rest;
+#[cfg(feature = "client")]
 pub mod send;

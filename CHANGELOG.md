@@ -6,6 +6,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING**: Renamed the `client` feature, which gated the blocking client and std, to `std`.
+
+  A consumer naming it moves to the new name:
+
+  ```toml
+  # before
+  io-msgraph = { version = "0.9", default-features = false, features = ["client"] }
+  # after
+  io-msgraph = { version = "0.10", default-features = false, features = ["std"] }
+  ```
+
+- **BREAKING**: Changed the `client` feature to gate the coroutines (`coroutine`, `v1::send`, `v1::page`, `v1::rest::batch` and every operation module under `v1::rest::users`) and the io-http, base64-codec, log and url dependencies.
+
+  It is on by default and implied by `std` and the TLS features. A consumer turning default features off to drive the coroutines itself adds it:
+
+  ```toml
+  # before
+  io-msgraph = { version = "0.9", default-features = false }
+  # after
+  io-msgraph = { version = "0.10", default-features = false, features = ["client"] }
+  ```
+
+  The vocabulary stays compiled without it: the resource types, `v1::field`, `v1::query`, and the `ical` and `vcard` projections.
+
 ## [0.9.4] - 2026-11-19
 
 ### Added
