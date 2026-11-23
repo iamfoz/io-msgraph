@@ -1327,10 +1327,17 @@ fn vevent(
     {
         let mut alarm = IcalCst::empty("VALARM");
         alarm.push(IcalProp::text(IcalPropKind::Action, vec![], "DISPLAY"));
+        // NOTE: Graph counts minutes before the start, a negative count
+        // being after it, where a TRIGGER counts from the start.
+        let trigger = if *minutes < 0 {
+            format!("PT{}M", minutes.unsigned_abs())
+        } else {
+            format!("-PT{minutes}M")
+        };
         alarm.push(IcalProp {
             name: IcalPropName::Kind(IcalPropKind::Trigger),
             params: Vec::new(),
-            value: IcalValue::Duration(format!("-PT{minutes}M").into()),
+            value: IcalValue::Duration(trigger.into()),
         });
         alarm.push(IcalProp::text(
             IcalPropKind::Description,
@@ -2573,6 +2580,25 @@ mod tests {
             ical.contains("BEGIN:VALARM\r\nACTION:DISPLAY\r\nTRIGGER:-PT15M\r\n"),
             "{ical}"
         );
+    }
+
+    #[test]
+    fn a_reminder_is_a_trigger_counted_from_the_start() {
+        for (minutes, trigger) in [(15, "-PT15M"), (0, "-PT0M"), (-480, "PT480M")] {
+            let event = MsgraphEvent {
+                is_reminder_on: MsgraphField::Set(true),
+                reminder_minutes_before_start: MsgraphField::Set(minutes),
+                ..master()
+            };
+            let ical = event.to_ical();
+
+            assert!(
+                ical.contains(&format!(
+                    "BEGIN:VALARM\r\nACTION:DISPLAY\r\nTRIGGER:{trigger}\r\n"
+                )),
+                "{minutes}: {ical}"
+            );
+        }
     }
 
     #[test]

@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ### Fixed
 
+- Fixed a reminder firing after the start to project as a positive `TRIGGER` (`PT480M` for -480), where it projected as the invalid `-PT-480M`.
 - **BREAKING**: `MsgraphEvent::reminder_minutes_before_start` is now `MsgraphField<i32>`. Graph answers a negative value for a reminder firing after the start, which failed the whole events page.
 
 ## [0.10.0] - 2026-11-21
