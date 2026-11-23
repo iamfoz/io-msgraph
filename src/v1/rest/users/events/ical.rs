@@ -1939,7 +1939,7 @@ fn find_prop<'c, 'a>(component: &'c IcalCst<'a>, name: &str) -> Option<&'c IcalL
 
 /// The lead time of a DISPLAY or AUDIO alarm triggering before the start,
 /// in minutes, `None` for any alarm Graph's single reminder cannot hold.
-fn reminder_minutes(alarm: &IcalCst<'_>) -> Option<u32> {
+fn reminder_minutes(alarm: &IcalCst<'_>) -> Option<i32> {
     if component_name(alarm) != "VALARM" {
         return None;
     }
@@ -1952,7 +1952,7 @@ fn reminder_minutes(alarm: &IcalCst<'_>) -> Option<u32> {
     let lead = trigger.0.trim().strip_prefix('-')?.parse::<Span>().ok()?;
     let minutes = lead.total(jiff::Unit::Minute).ok()?;
 
-    let whole = minutes as u32;
+    let whole = minutes as i32;
     (minutes >= 0.0 && f64::from(whole) == minutes).then_some(whole)
 }
 

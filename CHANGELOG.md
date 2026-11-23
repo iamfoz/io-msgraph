@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- **BREAKING**: `MsgraphEvent::reminder_minutes_before_start` is now `MsgraphField<i32>`. Graph answers a negative value for a reminder firing after the start, which failed the whole events page.
+
 ## [0.10.0] - 2026-11-21
 
 ### Changed

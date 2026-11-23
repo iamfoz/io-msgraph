@@ -124,9 +124,10 @@ pub struct MsgraphEvent {
     /// Whether a reminder is set.
     #[serde(default, skip_serializing_if = "MsgraphField::is_unset")]
     pub is_reminder_on: MsgraphField<bool>,
-    /// How long before the start the reminder fires, in minutes.
+    /// How long before the start the reminder fires, in minutes;
+    /// negative when it fires after the start.
     #[serde(default, skip_serializing_if = "MsgraphField::is_unset")]
-    pub reminder_minutes_before_start: MsgraphField<u32>,
+    pub reminder_minutes_before_start: MsgraphField<i32>,
     /// Whether the event was cancelled, read-only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub is_cancelled: Option<bool>,
@@ -421,4 +422,23 @@ pub enum MsgraphWeekIndex {
     Fourth,
     /// The last.
     Last,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn event_with_negative_reminder_minutes_parses() {
+        // A reminder scheduled after the start is a negative number of
+        // minutes (e.g. -480); it must round-trip through deserialisation.
+        let json = r#"{
+            "start": { "dateTime": "2026-03-01T09:00:00.0000000", "timeZone": "Pacific Standard Time" },
+            "end":   { "dateTime": "2026-03-01T10:00:00.0000000", "timeZone": "Pacific Standard Time" },
+            "reminderMinutesBeforeStart": -480
+        }"#;
+        let event: MsgraphEvent =
+            serde_json::from_str(json).expect("negative reminderMinutesBeforeStart must parse");
+        assert_eq!(event.reminder_minutes_before_start.as_option(), Some(&-480));
+    }
 }
