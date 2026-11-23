@@ -1944,8 +1944,9 @@ fn find_prop<'c, 'a>(component: &'c IcalCst<'a>, name: &str) -> Option<&'c IcalL
     })
 }
 
-/// The lead time of a DISPLAY or AUDIO alarm triggering before the start,
-/// in minutes, `None` for any alarm Graph's single reminder cannot hold.
+/// The lead time of a DISPLAY or AUDIO alarm triggering relative to the
+/// start, in minutes, negative for one triggering after it, `None` for
+/// any alarm Graph's single reminder cannot hold.
 fn reminder_minutes(alarm: &IcalCst<'_>) -> Option<i32> {
     if component_name(alarm) != "VALARM" {
         return None;
@@ -1955,12 +1956,25 @@ fn reminder_minutes(alarm: &IcalCst<'_>) -> Option<i32> {
         return None;
     }
 
+    // NOTE: Graph counts from the start alone.
+    let from_end = find_prop(alarm, "TRIGGER")?
+        .params
+        .iter()
+        .any(|param| param.to_string().eq_ignore_ascii_case("RELATED=END"));
+    if from_end {
+        return None;
+    }
+
     let trigger = alarm.prop::<TRIGGER>()?;
-    let lead = trigger.0.trim().strip_prefix('-')?.parse::<Span>().ok()?;
-    let minutes = lead.total(jiff::Unit::Minute).ok()?;
+    let trigger = trigger.0.trim();
+    let (before, span) = match trigger.strip_prefix('-') {
+        Some(span) => (true, span),
+        None => (false, trigger.strip_prefix('+').unwrap_or(trigger)),
+    };
+    let minutes = span.parse::<Span>().ok()?.total(jiff::Unit::Minute).ok()?;
 
     let whole = minutes as i32;
-    (minutes >= 0.0 && f64::from(whole) == minutes).then_some(whole)
+    (minutes >= 0.0 && f64::from(whole) == minutes).then_some(if before { whole } else { -whole })
 }
 
 /// An ORGANIZER or ATTENDEE value and its CN.
@@ -2599,6 +2613,52 @@ mod tests {
                 "{minutes}: {ical}"
             );
         }
+    }
+
+    #[test]
+    fn a_reminder_reads_back_from_its_trigger() {
+        for minutes in [15, 0, -480] {
+            let event = MsgraphEvent {
+                is_reminder_on: MsgraphField::Set(true),
+                reminder_minutes_before_start: MsgraphField::Set(minutes),
+                ..master()
+            };
+            let back = MsgraphEvent::from_ical(event.to_ical().as_bytes()).unwrap();
+
+            assert_eq!(back.is_reminder_on.as_option(), Some(&true), "{minutes}");
+            assert_eq!(
+                back.reminder_minutes_before_start.as_option(),
+                Some(&minutes),
+                "{minutes}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_trigger_reads_as_minutes_from_the_start() {
+        let alarm = |trigger: &str| {
+            let bare = MsgraphEvent {
+                is_reminder_on: MsgraphField::Unset,
+                reminder_minutes_before_start: MsgraphField::Unset,
+                ..master()
+            };
+            let ical = bare.to_ical().replace(
+                "END:VEVENT",
+                &format!("BEGIN:VALARM\r\nACTION:DISPLAY\r\n{trigger}\r\nEND:VALARM\r\nEND:VEVENT"),
+            );
+            let event = MsgraphEvent::from_ical(ical.as_bytes()).unwrap();
+            event.reminder_minutes_before_start.as_option().copied()
+        };
+
+        assert_eq!(alarm("TRIGGER:-PT1H"), Some(60));
+        assert_eq!(alarm("TRIGGER:PT8H"), Some(-480));
+        assert_eq!(alarm("TRIGGER:+PT5M"), Some(-5));
+        assert_eq!(alarm("TRIGGER:PT0M"), Some(0));
+        assert_eq!(alarm("TRIGGER;RELATED=START:PT5M"), Some(-5));
+        assert_eq!(alarm("TRIGGER;RELATED=END:PT5M"), None);
+        assert_eq!(alarm("TRIGGER;RELATED=END:-PT5M"), None);
+        assert_eq!(alarm("TRIGGER;VALUE=DATE-TIME:20261120T080000Z"), None);
+        assert_eq!(alarm("TRIGGER:PT30S"), None);
     }
 
     #[test]
