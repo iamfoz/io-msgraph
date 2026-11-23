@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ### Fixed
 
+- Fixed an alarm triggering after the start to read back as a negative reminder, where it was stashed and the reminder read as off. An alarm counted from the end (`RELATED=END`) is now stashed, where one before the end read as that many minutes before the start.
 - Fixed a reminder firing after the start to project as a positive `TRIGGER` (`PT480M` for -480), where it projected as the invalid `-PT-480M`.
 - **BREAKING**: `MsgraphEvent::reminder_minutes_before_start` is now `MsgraphField<i32>`. Graph answers a negative value for a reminder firing after the start, which failed the whole events page.
 
