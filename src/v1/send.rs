@@ -468,9 +468,26 @@ impl<T: DeserializeOwned> MsgraphCoroutine for MsgraphSend<T> {
                                 headers: response.headers,
                                 keep_alive,
                             })),
-                            Err(err) => MsgraphCoroutineState::Complete(Err(
-                                MsgraphSendError::ParseResponse(err),
-                            )),
+                            Err(err) => {
+                                // Diagnostic: when a 2xx body fails to
+                                // deserialize, preserve it so the exact
+                                // field serde choked on can be inspected.
+                                // Gated on MSGRAPH_PARSE_DUMP so normal
+                                // operation is untouched, and on the `std`
+                                // feature so no-std builds stay clean.
+                                #[cfg(feature = "std")]
+                                if let Ok(dir) = std::env::var("MSGRAPH_PARSE_DUMP") {
+                                    let path = format!("{dir}/{}", body.len());
+                                    let _ = std::fs::write(&path, body);
+                                    std::eprintln!(
+                                        "io-msgraph: parse failed ({err}); raw body ({} bytes) at {path}",
+                                        body.len()
+                                    );
+                                }
+                                MsgraphCoroutineState::Complete(Err(
+                                    MsgraphSendError::ParseResponse(err),
+                                ))
+                            }
                         }
                     } else {
                         let err = MsgraphApiError::of(&self.method, &response, keep_alive);
